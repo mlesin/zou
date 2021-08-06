@@ -14,7 +14,7 @@ from zou.remote.config_payload import (
     get_storage
 )
 
-from zou.app.utils.movie import (
+from zou.utils.movie import (
     EncodingParameters,
     build_playlist_movie,
     concat_demuxer,
