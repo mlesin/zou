@@ -3,19 +3,28 @@ import re
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError, StatementError
 
-from zou.app.utils import cache, events, fields, query as query_utils
+from zou.app.utils import (
+    cache,
+    date_helpers,
+    events,
+    fields,
+    query as query_utils
+)
 
 from zou.app.models.entity import Entity, EntityLink, EntityVersion
 from zou.app.models.project import Project
 from zou.app.models.schedule_item import ScheduleItem
 from zou.app.models.subscription import Subscription
 from zou.app.models.task import Task
+from zou.app.models.task_status import TaskStatus
 from zou.app.models.task import assignees_table
+from zou.app.models.time_spent import TimeSpent
 
 from zou.app.services import (
     deletion_service,
     entities_service,
     projects_service,
+    time_spents_service,
     user_service,
 )
 from zou.app.services.exception import (
@@ -1015,3 +1024,95 @@ def get_base_entity_type_name(entity_dict):
     elif is_episode(entity_dict):
         type_name = "Episode"
     return type_name
+
+
+def get_quotas(project_id, task_type_id, detail_level):
+    timezone = user_service.get_timezone()
+    shot_type = get_shot_type()
+    quotas = {
+    }
+    query = (
+        Task
+        .query
+        .filter(Task.project_id == project_id)
+        .filter(Task.task_type_id == task_type_id)
+        .filter(TaskStatus.is_done)
+        .filter(Entity.entity_type_id == shot_type["id"])
+        .join(TaskStatus)
+        .join(Entity, Entity.id == Task.entity_id)
+        .join(Project, Project.id == Task.project_id)
+        .outerjoin(TimeSpent, Task.id == TimeSpent.task_id)
+        .add_columns(
+            Entity.nb_frames,
+            TimeSpent.date,
+            TimeSpent.duration,
+            TimeSpent.person_id
+        )
+    )
+    result = query.all()
+    for (task, nb_frames, date, duration, person_id) in result:
+        frames = 0
+        if duration is not None:
+            person_id = str(person_id)
+            if nb_frames is not None:
+                nb_frames = round(nb_frames * (duration / task.duration))
+            else:
+                nb_frames = 0
+            _add_quota_entry(quotas, person_id, date, timezone, nb_frames)
+        else:
+            nb_frames = nb_frames or 0
+            for person in task.assignees:
+                person_id = str(person.id)
+                _add_quota_entry(
+                    quotas, person_id, task.end_date, timezone, nb_frames
+                )
+    return quotas
+
+
+
+def _add_quota_entry(quotas, person_id, date, timezone, nb_frames):
+    date_str = date_helpers.get_simple_string_with_timezone_from_date(
+        date,
+        timezone
+    )
+    week = date_str[:4] + "-" + str(date.isocalendar()[1])
+    month = date_str[:7]
+    if not person_id in quotas:
+        _init_quota_person(quotas, person_id)
+    _init_quota_date(quotas, person_id, date_str, week, month)
+    quotas[person_id]["day"]["frames"][date_str] += nb_frames
+    quotas[person_id]["day"]["count"][date_str] += 1
+    quotas[person_id]["week"]["frames"][week] += nb_frames
+    quotas[person_id]["week"]["count"][week] += 1
+    quotas[person_id]["month"]["frames"][month] += nb_frames
+    quotas[person_id]["month"]["count"][month] += 1
+
+
+def _init_quota_date(quotas, person_id, date_str, week, month):
+    if not date_str in quotas[person_id]["day"]["frames"]:
+        quotas[person_id]["day"]["frames"][date_str] = 0
+        quotas[person_id]["day"]["count"][date_str] = 0
+    if not week in quotas[person_id]["week"]["frames"]:
+        quotas[person_id]["week"]["frames"][week] = 0
+        quotas[person_id]["week"]["count"][week] = 0
+    if not month in quotas[person_id]["month"]["frames"]:
+        quotas[person_id]["month"]["frames"][month] = 0
+        quotas[person_id]["month"]["count"][month] = 0
+
+
+def _init_quota_person(quotas, person_id):
+    quotas[person_id] = {}
+    quotas[person_id] = {
+        "day": {
+            "frames": {},
+            "count": {}
+        },
+        "week": {
+            "frames": {},
+            "count": {}
+        },
+        "month": {
+            "frames": {},
+            "count": {}
+        },
+    }
