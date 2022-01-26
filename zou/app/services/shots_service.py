@@ -1,5 +1,3 @@
-import re
-
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError, StatementError
 
@@ -1027,6 +1025,7 @@ def get_base_entity_type_name(entity_dict):
 
 
 def get_quotas(project_id, task_type_id, detail_level):
+    fps = projects_service.get_project_fps(project_id)
     timezone = user_service.get_timezone()
     shot_type = get_shot_type()
     quotas = {
@@ -1036,9 +1035,8 @@ def get_quotas(project_id, task_type_id, detail_level):
         .query
         .filter(Task.project_id == project_id)
         .filter(Task.task_type_id == task_type_id)
-        .filter(TaskStatus.is_done)
+        .filter(Task.end_date != None)
         .filter(Entity.entity_type_id == shot_type["id"])
-        .join(TaskStatus)
         .join(Entity, Entity.id == Task.entity_id)
         .join(Project, Project.id == Task.project_id)
         .outerjoin(TimeSpent, Task.id == TimeSpent.task_id)
@@ -1058,46 +1056,70 @@ def get_quotas(project_id, task_type_id, detail_level):
                 nb_frames = round(nb_frames * (duration / task.duration))
             else:
                 nb_frames = 0
-            _add_quota_entry(quotas, person_id, date, timezone, nb_frames)
+            _add_quota_entry(quotas, person_id, date, timezone, nb_frames, fps)
         else:
             nb_frames = nb_frames or 0
             for person in task.assignees:
                 person_id = str(person.id)
                 _add_quota_entry(
-                    quotas, person_id, task.end_date, timezone, nb_frames
+                    quotas, person_id, task.end_date, timezone, nb_frames, fps
                 )
     return quotas
 
 
-
-def _add_quota_entry(quotas, person_id, date, timezone, nb_frames):
+def _add_quota_entry(quotas, person_id, date, timezone, nb_frames, fps):
+    nb_seconds = nb_frames / fps
     date_str = date_helpers.get_simple_string_with_timezone_from_date(
         date,
         timezone
     )
-    week = date_str[:4] + "-" + str(date.isocalendar()[1])
+    year = date_str[:4]
+    week = year + "-" + str(date.isocalendar()[1])
     month = date_str[:7]
-    if not person_id in quotas:
+    if person_id not in quotas:
         _init_quota_person(quotas, person_id)
     _init_quota_date(quotas, person_id, date_str, week, month)
     quotas[person_id]["day"]["frames"][date_str] += nb_frames
+    quotas[person_id]["day"]["seconds"][date_str] += nb_seconds
     quotas[person_id]["day"]["count"][date_str] += 1
     quotas[person_id]["week"]["frames"][week] += nb_frames
+    quotas[person_id]["week"]["seconds"][week] += nb_seconds
     quotas[person_id]["week"]["count"][week] += 1
     quotas[person_id]["month"]["frames"][month] += nb_frames
+    quotas[person_id]["month"]["seconds"][month] += nb_seconds
     quotas[person_id]["month"]["count"][month] += 1
+    quotas[person_id]["year"]["frames"][year] += nb_frames
+    quotas[person_id]["year"]["seconds"][year] += nb_seconds
+    quotas[person_id]["year"]["count"][year] += 1
 
 
 def _init_quota_date(quotas, person_id, date_str, week, month):
-    if not date_str in quotas[person_id]["day"]["frames"]:
+    year = week[:4]
+    if date_str not in quotas[person_id]["day"]["frames"]:
         quotas[person_id]["day"]["frames"][date_str] = 0
+        quotas[person_id]["day"]["seconds"][date_str] = 0
         quotas[person_id]["day"]["count"][date_str] = 0
-    if not week in quotas[person_id]["week"]["frames"]:
+        if month not in quotas[person_id]["day"]["entries"]:
+            quotas[person_id]["day"]["entries"][month] = 0
+        quotas[person_id]["day"]["entries"][month] += 1
+    if week not in quotas[person_id]["week"]["frames"]:
         quotas[person_id]["week"]["frames"][week] = 0
+        quotas[person_id]["week"]["seconds"][week] = 0
         quotas[person_id]["week"]["count"][week] = 0
-    if not month in quotas[person_id]["month"]["frames"]:
+        if year not in quotas[person_id]["week"]["entries"]:
+            quotas[person_id]["week"]["entries"][year] = 0
+        quotas[person_id]["week"]["entries"][year] += 1
+    if month not in quotas[person_id]["month"]["frames"]:
         quotas[person_id]["month"]["frames"][month] = 0
+        quotas[person_id]["month"]["seconds"][month] = 0
         quotas[person_id]["month"]["count"][month] = 0
+        if year not in quotas[person_id]["month"]["entries"]:
+            quotas[person_id]["month"]["entries"][year] = 0
+        quotas[person_id]["month"]["entries"][year] += 1
+    if year not in quotas[person_id]["year"]["frames"]:
+        quotas[person_id]["year"]["frames"][year] = 0
+        quotas[person_id]["year"]["seconds"][year] = 0
+        quotas[person_id]["year"]["count"][year] = 0
 
 
 def _init_quota_person(quotas, person_id):
@@ -1105,14 +1127,25 @@ def _init_quota_person(quotas, person_id):
     quotas[person_id] = {
         "day": {
             "frames": {},
-            "count": {}
+            "seconds": {},
+            "count": {},
+            "entries": {}
         },
         "week": {
             "frames": {},
-            "count": {}
+            "seconds": {},
+            "count": {},
+            "entries": {}
         },
         "month": {
             "frames": {},
-            "count": {}
+            "seconds": {},
+            "count": {},
+            "entries": {}
         },
+        "year": {
+            "frames": {},
+            "seconds": {},
+            "count": {}
+        }
     }
