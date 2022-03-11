@@ -16,7 +16,8 @@ class TaskTypesResource(BaseModelsResource):
 
     def update_data(self, data):
         name = data.get("name", None)
-        task_type = TaskType.get_by(name=name)
+        for_entity = data.get("for_entity", None)
+        task_type = TaskType.get_by(name=name, for_entity=for_entity)
         if task_type is not None:
             raise ArgumentsException(
                 "A task type with similar name already exists"
@@ -37,8 +38,9 @@ class TaskTypeResource(BaseModelResource):
 
     def update_data(self, data, instance_id):
         name = data.get("name", None)
+        for_entity = data.get("for_entity", None)
         if name is not None:
-            task_type = TaskType.get_by(name=name)
+            task_type = TaskType.get_by(name=name, for_entity=for_entity)
             if task_type is not None and instance_id != str(task_type.id):
                 raise ArgumentsException(
                     "A task type with similar name already exists"
